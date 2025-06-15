@@ -38,7 +38,7 @@ rx_socket.on('listening', () => {
 
 //When message received on RX socket duplicate it to SerialPort
 rx_socket.on('message', (data) => {
-    console.log(data);
+    //console.log(data);
     //console.log(data.toString());
     //let string = data.toString();
     serialport.write(data);
@@ -62,7 +62,7 @@ serialport.on('open', () => {
 
 serialport.on('data', (data) => {
     data.forEach(byte => {
-      console.log(byte);
+      //console.log(byte);
         switch(byte)
         { 
             case 0x0d: // CR: Carriage return
