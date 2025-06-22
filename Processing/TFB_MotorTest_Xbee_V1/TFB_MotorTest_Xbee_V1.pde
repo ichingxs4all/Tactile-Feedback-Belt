@@ -59,7 +59,7 @@ void stopAllMotors() {
   sendMotors();
   command= "All motors stopped";
   bg = color(0, 0, 0);
-  motorNo = 0;
+  //motorNo = 0;
 }
 
 void startAllMotors() {

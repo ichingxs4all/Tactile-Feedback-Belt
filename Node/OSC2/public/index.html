@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Motor PWM Controller</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body {
+      background: #121212;
+      color: #f5f5f5;
+      font-family: sans-serif;
+      padding: 20px;
+      text-align: center;
+    }
+    .motor {
+      display: inline-block;
+      margin: 10px;
+      padding: 10px;
+      background: #1e1e1e;
+      border-radius: 10px;
+      width: 120px;
+    }
+    input[type="range"] {
+      width: 100%;
+    }
+    button {
+      margin: 10px;
+      padding: 6px 12px;
+      background: #444;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    select {
+      margin-left: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Motor PWM Controller</h1>
+  <div id="motors"></div>
+
+  <div style="margin-top: 30px;">
+    <button onclick="savePreset()">💾 Preset opslaan</button>
+    <select id="presetList"></select>
+    <button onclick="loadPreset()">📥 Herstel preset</button>
+  </div>
+
+  <script>
+    const socket = io();
+    const motorContainer = document.getElementById('motors');
+    const presetList = document.getElementById('presetList');
+    const sliders = [];
+
+    function createMotor(index, initialValue) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'motor';
+
+      const label = document.createElement('div');
+      label.textContent = `Motor ${index + 1}`;
+      wrapper.appendChild(label);
+
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = 0;
+      input.max = 100;
+      input.value = initialValue;
+      input.dataset.index = index;
+      input.addEventListener('input', () => {
+        const val = parseInt(input.value);
+        socket.emit('setPWM', { index, value: val });
+        span.textContent = `PWM: ${val}`;
+      });
+      wrapper.appendChild(input);
+
+      const span = document.createElement('span');
+      span.textContent = `PWM: ${initialValue}`;
+      wrapper.appendChild(span);
+
+      sliders[index] = { input, span };
+      motorContainer.appendChild(wrapper);
+    }
+
+    socket.on('init', pwm => {
+      motorContainer.innerHTML = '';
+      pwm.forEach((val, i) => createMotor(i, val));
+      refreshPresetList();
+    });
+
+    socket.on('updatePWM', ({ index, value }) => {
+      const s = sliders[index];
+      if (s) {
+        s.input.value = value;
+        s.span.textContent = `PWM: ${value}`;
+      }
+    });
+
+    function savePreset() {
+      const values = sliders.map(s => parseInt(s.input.value));
+      const name = prompt('Preset naam:');
+      if (!name) return;
+      localStorage.setItem(`preset-${name}`, JSON.stringify(values));
+      refreshPresetList();
+      alert(`Preset "${name}" opgeslagen.`);
+    }
+
+    function loadPreset() {
+      const name = presetList.value;
+      const data = localStorage.getItem(`preset-${name}`);
+      if (!data) return;
+      const values = JSON.parse(data);
+      values.forEach((val, i) => {
+        sliders[i].input.value = val;
+        sliders[i].span.textContent = `PWM: ${val}`;
+        socket.emit('setPWM', { index: i, value: val });
+      });
+    }
+
+    function refreshPresetList() {
+      presetList.innerHTML = '';
+      Object.keys(localStorage)
+        .filter(k => k.startsWith('preset-'))
+        .forEach(k => {
+          const name = k.replace('preset-', '');
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          presetList.appendChild(opt);
+        });
+    }
+  </script>
+</body>
+</html>

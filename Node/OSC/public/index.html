@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Motor PWM Controller</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      background: #111;
+      color: #eee;
+      padding: 20px;
+      text-align: center;
+    }
+    h1 { margin-bottom: 20px; }
+    .motor {
+      display: inline-block;
+      margin: 10px;
+      background: #222;
+      padding: 10px;
+      border-radius: 8px;
+      width: 120px;
+    }
+    .motor input[type="range"] {
+      width: 100%;
+    }
+    .motor span {
+      display: block;
+      margin-top: 5px;
+      font-size: 14px;
+      color: #ccc;
+    }
+  </style>
+</head>
+<body>
+  <h1>Motor PWM Controller</h1>
+  <div id="motors"></div>
+
+  <script>
+    const socket = io();
+    const motorContainer = document.getElementById('motors');
+
+    const createMotorSlider = (index, initialValue) => {
+      const div = document.createElement('div');
+      div.className = 'motor';
+
+      const label = document.createElement('div');
+      label.textContent = `Motor ${index + 1}`;
+      div.appendChild(label);
+
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = 0;
+      input.max = 100;
+      input.value = initialValue;
+      input.addEventListener('input', () => {
+        socket.emit('setPWM', { index, value: parseInt(input.value) });
+        valueSpan.textContent = `PWM: ${input.value}`;
+      });
+      div.appendChild(input);
+
+      const valueSpan = document.createElement('span');
+      valueSpan.textContent = `PWM: ${initialValue}`;
+      div.appendChild(valueSpan);
+
+      motorContainer.appendChild(div);
+    };
+
+    socket.on('init', motorValues => {
+      motorContainer.innerHTML = '';
+      motorValues.forEach((val, i) => createMotorSlider(i, val));
+    });
+  </script>
+</body>
+</html>
