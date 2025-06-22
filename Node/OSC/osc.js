@@ -1,84 +1,57 @@
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const OSC = require('osc');
+const osc = require('osc');
+const { SerialPort } = require('serialport');
 
-
-const { SerialPort } = require('serialport')
-let serialPortPath='/dev/cu.usbserial-DA013LCA';  //The path of the serial2usb XBee module on the hosting system 
-
+let serialPortPath = '/dev/cu.usbserial-DA013LCA';
 
 const NUM_MOTORS = 15;
 let PWM = new Array(NUM_MOTORS).fill(0);
 const fadeIntervals = new Array(NUM_MOTORS).fill(null);
 const lastTargetPWM = new Array(NUM_MOTORS).fill(0);
-let easingProfiles = {}; // aangepaste curves
+let easingProfiles = {};
 let feedbackEnabled = true;
 let heartbeatEnabled = false;
 let tempoBPM = 120;
 
-// ==== XBee-seriële poort ====
-//Pas dit aan naar de juiste poort voor jouw systeem
-//Op Windows kan dit iets zijn als 'COM3', op Linux iets als '/dev/ttyUSB0' of '/dev/ttyACM0'
-//Op macOS kan het iets zijn als '/dev/cu.usbserial-DA013LCA' of '/dev/tty.usbserial-DA013LCA'
-//Controleer de poort met een terminal of via de systeeminstellingen
-//Voorbeeld: ls /dev/tty* of ls /dev/cu.* op mac
-//Zorg ervoor dat de XBee correct is verbonden en de juiste baudrate gebruikt (57600)
-//Voorbeeld: /dev/ttyUSB0, /dev/ttyACM0, /dev/cu.usbserial-DA013LCA, etc.
-//Open the serialport to the XBee module
-const port = new SerialPort({ path: serialPortPath, baudRate: 57600 }, function (err) {
-  if (err) {
-    return console.log('Error: ', err.message)
-  }
-})
-// Luister naar open events
-port.on('open', () => {
-  console.log('XBee-seriële poort geopend:', serialPortPath);
-}); 
-// Luister naar close events
-port.on('close', () => {
-  console.log('XBee-seriële poort gesloten');
+// === Seriële poort (XBee) ===
+const port = new SerialPort({ path: serialPortPath, baudRate: 57600 }, err => {
+  if (err) return console.log('Error: ', err.message);
 });
-// Luister naar error events
-port.on('error', (err) => {
+
+port.on('open', () => console.log('XBee-seriële poort geopend:', serialPortPath));
+port.on('close', () => console.log('XBee-seriële poort gesloten'));
+port.on('error', err => {
   console.error('Fout bij de XBee-seriële poort:', err);
   process.exit(1);
-}); 
-// Luister naar drain events
-port.on('drain', () => {
-  console.log('XBee-seriële poort is leeg');
 });
-// Luister naar disconnect events
+port.on('drain', () => console.log('XBee-seriële poort is leeg'));
 port.on('disconnect', () => {
   console.log('XBee-seriële poort is losgekoppeld');
   process.exit(1);
 });
-
-// Luister naar data events
-port.on('data', (data) => {
-  // console.log('Data ontvangen van XBee:', data);
-  // Hier kun je de ontvangen data verwerken als dat nodig is
-}); 
-// Luister naar open events
-port.on('error', (err) => {
-  console.error('Fout bij het openen van de XBee-seriële poort:', err);
-  process.exit(1);
-}); 
-
-
-// === OSC Setup ===
-//const osc = new OSC.UDPServer({ localPort: 8000 });
-//const oscClient = new OSC.UDPClient({ remoteAddress: '127.0.0.1', remotePort: 8000 });
-
-var osc = new osc.WebSocketPort({
-    url: "ws://localhost:8000", // URL to your Web Socket server.
-    metadata: true
+port.on('data', data => {
+  // verwerk inkomende data indien nodig
 });
-osc.open();
 
+// === OSC Setup (v2.4.5 compatible) ===
+const oscServer = new osc.UDPPort({
+  localAddress: '0.0.0.0',
+  localPort: 8000,
+  metadata: true
+});
+oscServer.open();
 
+const oscClient = new osc.UDPPort({
+  remoteAddress: '127.0.0.1',
+  remotePort: 8001,
+  metadata: true
+});
+oscClient.open();
 
-// === Websocket Server ===
+// === Websocket + frontend server ===
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
@@ -88,14 +61,12 @@ server.listen(3000, () => {
   console.log('Webinterface beschikbaar op http://localhost:3000');
 });
 
-// === Heartbeat ===
+// === Heartbeat interval ===
 setInterval(() => {
-  if (heartbeatEnabled) {
-    sendPWMToXbee();
-  }
+  if (heartbeatEnabled) sendPWMToXbee();
 }, 2000);
 
-// === Serial verzending ===
+// === PWM-commando naar XBee sturen ===
 function sendPWMToXbee() {
   const buffer = Buffer.alloc(21);
   buffer[0] = 0xFF;
@@ -107,12 +78,15 @@ function sendPWMToXbee() {
   port.write(buffer);
 }
 
-// === OSC Feedback ===
+// === OSC Feedback sturen ===
 function sendOSCFeedback(i, val) {
   if (!feedbackEnabled) return;
   oscClient.send({
     address: `/motor/${i + 1}/status`,
-    args: [{ type: 'string', value: 'pwm' }, { type: 'integer', value: val }]
+    args: [
+      { type: 's', value: 'pwm' },
+      { type: 'i', value: val }
+    ]
   });
 }
 
@@ -121,10 +95,10 @@ const EASING = {
   linear: t => t,
   easein: t => t * t,
   easeout: t => t * (2 - t),
-  easeinout: t => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
+  easeinout: t => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t)
 };
 
-// === Fade starten ===
+// === Fade ===
 function startFade(index, target, duration, easingName = 'linear') {
   stopFade(index);
   const start = PWM[index];
@@ -141,8 +115,7 @@ function startFade(index, target, duration, easingName = 'linear') {
     sendPWMToXbee();
     sendOSCFeedback(index, PWM[index]);
 
-    if ((target > start && PWM[index] >= target) ||
-        (target < start && PWM[index] <= target)) {
+    if ((target > start && PWM[index] >= target) || (target < start && PWM[index] <= target)) {
       PWM[index] = target;
       stopFade(index);
     }
@@ -156,7 +129,6 @@ function stopFade(i) {
   }
 }
 
-// === Interpoleer aangepaste easing-profiel ===
 function interpolateProfile(array, t) {
   if (!Array.isArray(array) || array.length < 2) return t;
   const idx = t * (array.length - 1);
@@ -165,72 +137,77 @@ function interpolateProfile(array, t) {
   return (1 - f) * array[i] + f * (array[i + 1] || array[i]);
 }
 
-// === OSC listeners ===
-osc.on('/motor/*', msg => {
-  const match = msg.address.match(/^\/motor\/(\d+)$/);
-  const index = parseInt(match[1], 10) - 1;
-  const args = msg.args.map(a => a.value);
+// === OSC Event Handling ===
+oscServer.on('message', msg => {
+  const { address, args } = msg;
 
-  if (args[0] === 'pwm') {
-    stopFade(index);
-    PWM[index] = Math.max(0, Math.min(100, Math.round(args[1])));
+  if (/^\/motor\/\d+$/.test(address)) {
+    const index = parseInt(address.split('/')[2], 10) - 1;
+    const values = args.map(a => a.value);
+
+    switch (values[0]) {
+      case 'pwm':
+        stopFade(index);
+        PWM[index] = Math.max(0, Math.min(100, Math.round(values[1])));
+        sendPWMToXbee();
+        sendOSCFeedback(index, PWM[index]);
+        break;
+
+      case 'fade':
+        if (values[2] === 'over') {
+          const duration = values[3];
+          const easing = values[5] || 'linear';
+          startFade(index, values[1], duration, easing);
+        } else if (values[2] === 'inbeats') {
+          const ms = (values[3] * 60000) / tempoBPM;
+          const easing = values[5] || 'linear';
+          startFade(index, values[1], ms, easing);
+        }
+        break;
+
+      case 'stop':
+        stopFade(index);
+        PWM[index] = 0;
+        sendPWMToXbee();
+        sendOSCFeedback(index, 0);
+        break;
+
+      case 'start':
+        startFade(index, lastTargetPWM[index], 1000, 'linear');
+        break;
+    }
+  }
+
+  if (address === '/motors/set') {
+    const vals = args.slice(1).map(a => Math.max(0, Math.min(100, Math.round(a.value))));
+    for (let i = 0; i < NUM_MOTORS; i++) {
+      PWM[i] = vals[i] || 0;
+      stopFade(i);
+      sendOSCFeedback(i, PWM[i]);
+    }
     sendPWMToXbee();
-    sendOSCFeedback(index, PWM[index]);
   }
 
-  if (args[0] === 'fade' && args[2] === 'over') {
-    const duration = args[3];
-    const easing = args[5] || 'linear';
-    startFade(index, args[1], duration, easing);
+  if (address === '/tempo') {
+    const bpm = args[0].value;
+    if (typeof bpm === 'number') tempoBPM = bpm;
   }
 
-  if (args[0] === 'fade' && args[2] === 'inbeats') {
-    const ms = (args[3] * 60000) / tempoBPM;
-    const easing = args[5] || 'linear';
-    startFade(index, args[1], ms, easing);
+  if (address === '/feedback') {
+    feedbackEnabled = !!args[0]?.value;
   }
 
-  if (args[0] === 'stop') {
-    stopFade(index);
-    PWM[index] = 0;
-    sendPWMToXbee();
-    sendOSCFeedback(index, 0);
+  if (address === '/heartbeat') {
+    heartbeatEnabled = !!args[0]?.value;
   }
 
-  if (args[0] === 'start') {
-    startFade(index, lastTargetPWM[index], 1000, 'linear');
-  }
-});
-
-osc.on('/motors/set', msg => {
-  const vals = msg.args.slice(1).map(a => Math.max(0, Math.min(100, Math.round(a.value))));
-  for (let i = 0; i < NUM_MOTORS; i++) {
-    PWM[i] = vals[i] || 0;
-    stopFade(i);
-    sendOSCFeedback(i, PWM[i]);
-  }
-  sendPWMToXbee();
-});
-
-osc.on('/tempo', msg => {
-  const bpm = msg.args[0].value;
-  if (typeof bpm === 'number') tempoBPM = bpm;
-});
-
-osc.on('/feedback', msg => {
-  feedbackEnabled = !!msg.args[0]?.value;
-});
-
-osc.on('/heartbeat', msg => {
-  heartbeatEnabled = !!msg.args[0]?.value;
-});
-
-osc.on('/easing/register', msg => {
-  const name = msg.args[0]?.value;
-  const values = msg.args.slice(1).map(a => a.value);
-  if (typeof name === 'string' && values.length >= 2) {
-    easingProfiles[name] = values;
-    console.log(`Easing-profiel "${name}" geregistreerd`);
+  if (address === '/easing/register') {
+    const name = args[0]?.value;
+    const values = args.slice(1).map(a => a.value);
+    if (typeof name === 'string' && values.length >= 2) {
+      easingProfiles[name] = values;
+      console.log(`Easing-profiel "${name}" geregistreerd`);
+    }
   }
 });
 
