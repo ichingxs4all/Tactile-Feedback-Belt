@@ -1,9 +1,19 @@
-
+// OSC server voor motorbesturing via XBee
+// Dit script maakt gebruik van de 'osc' en 'serialport' modules
+// Zorg ervoor dat deze modules zijn geïnstalleerd:
+// npm install osc serialport express socket.io   
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const osc = require('osc');
 const { SerialPort } = require('serialport');
+// === Configuratie ===
+// Pas het pad aan naar de seriële poort van je XBee module
+// Op macOS kan dit iets zijn als '/dev/cu.usbserial-DA013LCA'
+// Op Windows kan dit iets zijn als 'COM3' of 'COM4'
+// Op Linux kan dit iets zijn als '/dev/ttyUSB0' of '/dev/ttyACM0'
+// Zorg ervoor dat je de juiste poort gebruikt die overeenkomt met jouw systeem
+// Voorbeeld: als je een XBee module hebt aangesloten op /dev/cu.usbserial-DA013LCA, gebruik dan dat pad
 
 let serialPortPath = '/dev/cu.usbserial-DA013LCA';
 
@@ -16,25 +26,40 @@ let feedbackEnabled = true;
 let heartbeatEnabled = false;
 let tempoBPM = 120;
 
+console.log('Connect OSC on port 8000 ');
+console.log('Connect XBee on port:', serialPortPath); 
+
+
 // === Seriële poort (XBee) ===
 const port = new SerialPort({ path: serialPortPath, baudRate: 57600 }, err => {
   if (err) return console.log('Error: ', err.message);
 });
 
+// Wacht tot de seriële poort open is
 port.on('open', () => console.log('XBee-seriële poort geopend:', serialPortPath));
+// Luister naar inkomende data van de XBee module 
+port.on('data', data => {
+  console.log('Inkomende data van XBee:', data.toString());
+});
+// Luister naar de status van de seriële poort
+port.on('ready', () => console.log('XBee-seriële poort is klaar voor gebruik'));
+
+
 port.on('close', () => console.log('XBee-seriële poort gesloten'));
+
 port.on('error', err => {
   console.error('Fout bij de XBee-seriële poort:', err);
   process.exit(1);
 });
+
 port.on('drain', () => console.log('XBee-seriële poort is leeg'));
+
 port.on('disconnect', () => {
   console.log('XBee-seriële poort is losgekoppeld');
   process.exit(1);
 });
-port.on('data', data => {
-  // verwerk inkomende data indien nodig
-});
+
+
 
 // === OSC Setup (v2.4.5 compatible) ===
 const oscServer = new osc.UDPPort({
@@ -50,6 +75,22 @@ const oscClient = new osc.UDPPort({
   metadata: true
 });
 oscClient.open();
+oscClient.on('ready', () => {
+  console.log('OSC client klaar en verbonden met port 8001');
+});
+oscClient.on('error', err => {
+  console.error('Fout bij OSC client:', err);
+  process.exit(1);
+});
+oscClient.on('close', () => {
+  console.log('OSC client gesloten');
+  process.exit(1);
+});
+oscClient.on('disconnect', () => {
+  console.log('OSC client is losgekoppeld');
+  process.exit(1);
+});
+oscClient.on('drain', () => console.log('OSC client is leeg'));
 
 // === Websocket + frontend server ===
 const app = express();
@@ -76,6 +117,103 @@ function sendPWMToXbee() {
   for (let i = 0; i < NUM_MOTORS; i++) buffer[6 + i] = PWM[i];
   buffer[20] = 0xFE;
   port.write(buffer);
+  console.log('PWM-commando verzonden naar XBee:', PWM);
+  if (feedbackEnabled) {
+    for (let i = 0; i < NUM_MOTORS; i++) {
+      sendOSCFeedback(i, PWM[i]);
+    }
+  }
+  io.emit('pwmUpdate', PWM); // Stuur de PWM-waarden naar de frontend
+  console.log('PWM-waarden naar frontend gestuurd:', PWM);
+  if (heartbeatEnabled) {
+    oscClient.send({
+      address: '/heartbeat',
+      args: [{ type: 'i', value: Date.now() }]
+    });
+  }
+  console.log('Heartbeat verzonden via OSC');
+  // Stuur de huidige BPM via OSC
+  oscClient.send({
+    address: '/tempo',
+    args: [{ type: 'i', value: tempoBPM }]
+  });
+  console.log('BPM verzonden via OSC:', tempoBPM);
+  // Stuur de feedback status via OSC
+  oscClient.send({
+    address: '/feedback',
+    args: [{ type: 'i', value: feedbackEnabled ? 1 : 0 }]
+  });
+  console.log('Feedback status verzonden via OSC:', feedbackEnabled);
+  // Stuur de heartbeat status via OSC
+  oscClient.send({
+    address: '/heartbeat', 
+    args: [{ type: 'i', value: heartbeatEnabled ? 1 : 0 }]
+  });
+  console.log('Heartbeat status verzonden via OSC:', heartbeatEnabled);
+  // Stuur de huidige PWM-waarden naar de OSC client
+  for (let i = 0; i < NUM_MOTORS; i++) {
+    oscClient.send({
+      address: `/motor/${i + 1}/status`,
+      args: [
+        { type: 's', value: 'pwm' },
+        { type: 'i', value: PWM[i] }
+      ]
+    });
+    console.log(`PWM-waarde voor motor ${i + 1} verzonden via OSC:`, PWM[i]);
+  }
+  // Stuur de laatste target PWM-waarden via OSC
+  oscClient.send({
+    address: '/motors/lastTarget',
+    args: lastTargetPWM.map(val => ({ type: 'i', value: val }))
+  });
+  // Log de laatste target PWM-waarden
+  lastTargetPWM.forEach((val, i) => {
+    console.log(`Laatste target PWM-waarde voor motor ${i + 1}:`, val);
+  });
+
+  console.log('Laatste target PWM-waarden verzonden via OSC:', lastTargetPWM);
+  // Stuur de geregistreerde easing-profielen via OSC
+  for (const [name, values] of Object.entries(easingProfiles)) {
+    oscClient.send({
+      address: '/easing/profile',
+      args: [
+        { type: 's', value: name },
+        ...values.map(v => ({ type: 'f', value: v }))
+      ]
+    });
+    console.log(`Easing-profiel "${name}" verzonden via OSC:`, values);
+  }
+  // Log de geregistreerde easing-profielen
+  console.log('Geregistreerde easing-profielen:', easingProfiles);
+  // Stuur een bevestiging dat de PWM-commando's zijn verzonden
+  oscClient.send({
+    address: '/motors/commandSent',
+    args: [{ type: 'i', value: 1 }]
+  });
+  console.log('Bevestiging van PWM-commando\'s verzonden via OSC');
+  // Stuur de huidige status van de motoren via OSC
+  for (let i = 0; i < NUM_MOTORS; i++) {
+    oscClient.send({
+      address: `/motor/${i + 1}/status`,
+      args: [
+        { type: 's', value: 'pwm' },
+        { type: 'i', value: PWM[i] }
+      ]
+    });
+    console.log(`Status voor motor ${i + 1} verzonden via OSC:`, PWM[i]);
+  }
+  // Log de status van de motoren
+  console.log('Status van alle motoren verzonden via OSC:', PWM);
+  // Stuur een algemene status update via OSC
+  oscClient.send({
+    address: '/motors/status',
+    args: [
+      { type: 'i', value: 1 }, // 1 betekent actief
+      ...PWM.map(val => ({ type: 'i', value: val }))
+    ]
+  });
+  console.log('Algemene status update verzonden via OSC:', PWM);
+
 }
 
 // === OSC Feedback sturen ===
@@ -177,6 +315,10 @@ oscServer.on('message', msg => {
         break;
     }
   }
+
+
+
+
 
   if (address === '/motors/set') {
     const vals = args.slice(1).map(a => Math.max(0, Math.min(100, Math.round(a.value))));
