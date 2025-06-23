@@ -17,6 +17,7 @@ const NUM_MOTORS = 15;
 const NOTE_START = 60;
 const CC_PWM_START = 30;     // CC#30 t/m CC#44 → PWM-waarde voor motor 1–15
 const CC_MODE_SELECT = 20;   // CC#20 = Toggle control mode van motor X
+const MAX_PWM = 200; // Maximale PWM-waarde (0–200)
 
 console.log('Gebruik CC 20 om te switchen tussen NoteOn en CC modus');
 console.log('Gebruik CC 30 t/m 44 de PWM-waarde voor motor 1 - 15 te sturen');  
@@ -134,7 +135,7 @@ input.on('message', (deltaTime, message) => {
 
     if (motorControlMode[motorIndex] === 0) {
       // Alleen reageren als motor in "note" mode is
-      const pwm = isNoteOn ? Math.round((velocity / 127) * 100) : 0;
+      const pwm = isNoteOn ? Math.round((velocity / 127) * MAX_PWM) : 0;
       motorPWM[motorIndex] = pwm;
 
       console.log(`Note ${note} → Motor ${motorIndex + 1}, PWM ${pwm}, via NOTE`);
@@ -192,7 +193,7 @@ input.on('message', (deltaTime, message) => {
         // ccVal = 0 → 0% PWM, ccVal = 127 → 100% PWM
         // ccVal moet een waarde zijn tussen 0 en 127 (voor motoren 1–15)
         
-        const pwm = Math.round((ccVal / 127) * 100);
+        const pwm = Math.round((ccVal / 127) * MAX_PWM);
         motorPWM[motorIndex] = pwm;
         console.log(`Motor ${motorIndex + 1} PWM via CC#${ccNum}: ${pwm}`);
         sendMotorPacket();
@@ -206,7 +207,7 @@ input.on('message', (deltaTime, message) => {
 // Bytes 1-5 zijn gereserveerd voor andere doeleinden (bijv. statusinformatie)
 // Bytes 6-20 zijn PWM-waarden voor motoren 1–15
 // Motor 1 → byte 6, Motor 2 → byte 7, ..., Motor 15 → byte 20
-// PWM-waarden zijn 0–100, dus elke byte moet een waarde zijn tussen 0 en 100
+// PWM-waarden zijn 0–MAX_PWM, dus elke byte moet een waarde zijn tussen 0 en MAX_PWM
 // De XBee-module ontvangt dit pakket en stuurt de PWM-waarden door naar de microcontroller
 // De microcontroller ontvangt de PWM-waarden en stuurt deze door naar de motoren
 // De microcontroller moet de PWM-waarden verwerken en de motoren aansturen
