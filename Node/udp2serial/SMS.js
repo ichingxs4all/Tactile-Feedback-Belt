@@ -44,8 +44,6 @@ rx_socket.on('message', (data) => {
     serialport.write(data);
 })
 
-//Test
-//udpServer.send('test', port, ip);
 
 //Open the serial
 const serialport = new SerialPort({ path: serialPortPath, baudRate: 57600 }, function (err) {
@@ -56,7 +54,6 @@ const serialport = new SerialPort({ path: serialPortPath, baudRate: 57600 }, fun
 
 serialport.on('open', () => {
     console.log("Opened serialport of XBee module");
-    //setTimeout(function(){ serialport.write("5050505050505050;"); }, 500);  
 });
 
 
